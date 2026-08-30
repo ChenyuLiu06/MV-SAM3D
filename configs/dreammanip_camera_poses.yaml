@@ -1,0 +1,16 @@
+# Fixed calibrated camera poses for the DreamManip rig.
+#
+# Fill this file after the external-calibration convention is confirmed.
+# The adapter currently treats each matrix as a 4x4 camera pose and does not
+# apply it to pointmaps yet. Do not put an inverse here unless we explicitly
+# decide that the calibration exports the opposite direction.
+#
+# Planned convention:
+#   matrix: camera -> calibrated rig/reference frame
+#   axes: OpenCV camera axes (X right, Y down, Z forward)
+#   unit: meter
+
+pose_type: camera_to_rig
+coordinate_system: opencv_camera
+unit: meter
+views: {}
