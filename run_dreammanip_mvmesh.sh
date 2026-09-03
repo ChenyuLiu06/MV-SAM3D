@@ -203,6 +203,11 @@ PY
   echo "[$INSTANCE_NAME] Stage 1 + Stage 2: running native MV-SAM3D on GPU $GPU_ID"
   echo "[$INSTANCE_NAME]   Stage 1 input: RGB + SAM2 mask + mask-only pointmap"
   echo "[$INSTANCE_NAME]   Stage 2 input: Stage 1 structure + RGB + SAM2 mask"
+  VISUALIZATION_ROOT="$INFERENCE_ROOT/visualization/$INSTANCE_NAME/object"
+  if [[ -d "$VISUALIZATION_ROOT" ]]; then
+    echo "[$INSTANCE_NAME] clearing previous runtime visualization"
+    rm -rf -- "$VISUALIZATION_ROOT"
+  fi
   (
     cd "$INFERENCE_ROOT"
     "$MVSAM_ENV/bin/python" "$MVSAM_REPO/run_inference_weighted.py" \
@@ -218,7 +223,6 @@ PY
       --no_stage2_weighting
   )
 
-  VISUALIZATION_ROOT="$INFERENCE_ROOT/visualization/$INSTANCE_NAME/object"
   RESULT_GLB=$(find "$VISUALIZATION_ROOT" -type f -name result.glb -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
   [[ -n "$RESULT_GLB" && -s "$RESULT_GLB" ]] || { echo "result.glb not found for $INSTANCE_NAME" >&2; exit 1; }
 
