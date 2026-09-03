@@ -2,9 +2,10 @@
 set -euo pipefail
 
 INPUT_ROOT=/home/yilin/chenyu/dreammanip2/mvmesh
-MVSAM_REPO=/home/yilin/chenyu/MV-SAM3D
+MVSAM_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MVSAM_ENV=/mnt/conda/yilin/sam3d_5090
 SAM2_RUNNER=/home/yilin/chenyu/sam-3d-objects-5090/run_dreammanip_multiview_segment.sh
+CHECKPOINTS_ROOT=/home/yilin/chenyu/sam-3d-objects-5090/checkpoints
 RUNTIME_ROOT="$MVSAM_REPO/data/dreammanip_runtime"
 
 usage() {
@@ -17,8 +18,8 @@ examples:
 
 The script runs, in order:
   1. SAM2 masks from daid_config.json point annotations
-  2. metric pointmaps from depth_aligned_m.npy + intrinsic.yaml
-  3. native MV-SAM3D Stage 1: RGB + mask + real pointmaps -> sparse structure
+  2. mask-only metric pointmaps (background points set to NaN)
+  3. native MV-SAM3D Stage 1: RGB + mask + mask-only pointmaps -> sparse structure
   4. native MV-SAM3D Stage 2: structure + RGB + mask -> mesh/Gaussian
   5. predicted metric pose applied and final mesh written to INSTANCE/mesh.glb
 EOF
@@ -60,6 +61,10 @@ done
 [[ -d "$MVSAM_REPO" ]] || { echo "MV-SAM3D repo not found: $MVSAM_REPO" >&2; exit 1; }
 [[ -x "$MVSAM_ENV/bin/python" ]] || { echo "Python environment not found: $MVSAM_ENV" >&2; exit 1; }
 [[ -x "$SAM2_RUNNER" ]] || { echo "SAM2 runner not found: $SAM2_RUNNER" >&2; exit 1; }
+[[ -f "$CHECKPOINTS_ROOT/hf-5090/pipeline.yaml" ]] || {
+  echo "MV-SAM3D checkpoints not found: $CHECKPOINTS_ROOT/hf-5090/pipeline.yaml" >&2
+  exit 1
+}
 
 declare -a INSTANCE_DIRS=()
 if [[ -n "$INSTANCE" ]]; then
@@ -120,6 +125,14 @@ export MPLCONFIGDIR=/tmp/yilin-mpl
 export TORCH_EXTENSIONS_DIR=/mnt/conda/yilin/torch-extensions
 export LD_LIBRARY_PATH="$MVSAM_ENV/targets/x86_64-linux/lib:$MVSAM_ENV/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+if [[ ! -e "$MVSAM_REPO/checkpoints" && ! -L "$MVSAM_REPO/checkpoints" ]]; then
+  ln -s "$CHECKPOINTS_ROOT" "$MVSAM_REPO/checkpoints"
+fi
+[[ -f "$MVSAM_REPO/checkpoints/hf-5090/pipeline.yaml" ]] || {
+  echo "MV-SAM3D checkpoint link is invalid: $MVSAM_REPO/checkpoints" >&2
+  exit 1
+}
+
 mkdir -p "$RUNTIME_ROOT"
 cd "$MVSAM_REPO"
 
@@ -127,7 +140,7 @@ for INSTANCE_DIR in "${INSTANCE_DIRS[@]}"; do
   INSTANCE_NAME=$(basename "$INSTANCE_DIR")
   RUNTIME_DIR="$RUNTIME_ROOT/$INSTANCE_NAME"
 
-  echo "[$INSTANCE_NAME] building masks + real metric pointmaps input"
+  echo "[$INSTANCE_NAME] building masks + mask-only metric pointmaps input"
   "$MVSAM_ENV/bin/python" - "$INSTANCE_DIR" "$RUNTIME_DIR" <<'PY'
 import sys
 from pathlib import Path
@@ -163,8 +176,11 @@ for index, view in enumerate(sample.views):
     rgba = np.concatenate((view.image, alpha), axis=2)
     Image.fromarray(rgba, mode="RGBA").save(mask_path)
 
-    np.save(view.directory / "pointmap.npy", view.pointmap)
-    pointmaps.append(view.pointmap)
+    pointmap = view.pointmap.copy()
+    pointmap[:, ~view.mask] = np.nan
+
+    np.save(view.directory / "pointmap.npy", pointmap)
+    pointmaps.append(pointmap)
     intrinsics.append(view.intrinsics)
     image_files.append(image_path.name)
 
@@ -184,7 +200,7 @@ PY
   [[ -s "$RUNTIME_DIR/real_pointmaps.npz" ]] || { echo "pointmap package was not created" >&2; exit 1; }
 
   echo "[$INSTANCE_NAME] Stage 1 + Stage 2: running native MV-SAM3D on GPU $GPU_ID"
-  echo "[$INSTANCE_NAME]   Stage 1 input: RGB + SAM2 mask + real pointmap"
+  echo "[$INSTANCE_NAME]   Stage 1 input: RGB + SAM2 mask + mask-only pointmap"
   echo "[$INSTANCE_NAME]   Stage 2 input: Stage 1 structure + RGB + SAM2 mask"
   "$MVSAM_ENV/bin/python" run_inference_weighted.py \
     --input_path "$RUNTIME_DIR" \
