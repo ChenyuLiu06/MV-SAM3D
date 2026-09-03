@@ -7,6 +7,7 @@ MVSAM_ENV=/mnt/conda/yilin/sam3d_5090
 SAM2_RUNNER=/home/yilin/chenyu/sam-3d-objects-5090/run_dreammanip_multiview_segment.sh
 CHECKPOINTS_ROOT=/home/yilin/chenyu/sam-3d-objects-5090/checkpoints
 RUNTIME_ROOT="$MVSAM_REPO/data/dreammanip_runtime"
+INFERENCE_ROOT="$RUNTIME_ROOT/inference_workspace"
 
 usage() {
   cat <<EOF
@@ -125,15 +126,15 @@ export MPLCONFIGDIR=/tmp/yilin-mpl
 export TORCH_EXTENSIONS_DIR=/mnt/conda/yilin/torch-extensions
 export LD_LIBRARY_PATH="$MVSAM_ENV/targets/x86_64-linux/lib:$MVSAM_ENV/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-if [[ ! -e "$MVSAM_REPO/checkpoints" && ! -L "$MVSAM_REPO/checkpoints" ]]; then
-  ln -s "$CHECKPOINTS_ROOT" "$MVSAM_REPO/checkpoints"
+mkdir -p "$RUNTIME_ROOT" "$INFERENCE_ROOT"
+if [[ ! -e "$INFERENCE_ROOT/checkpoints" && ! -L "$INFERENCE_ROOT/checkpoints" ]]; then
+  ln -s "$CHECKPOINTS_ROOT" "$INFERENCE_ROOT/checkpoints"
 fi
-[[ -f "$MVSAM_REPO/checkpoints/hf-5090/pipeline.yaml" ]] || {
-  echo "MV-SAM3D checkpoint link is invalid: $MVSAM_REPO/checkpoints" >&2
+[[ -f "$INFERENCE_ROOT/checkpoints/hf-5090/pipeline.yaml" ]] || {
+  echo "MV-SAM3D checkpoint link is invalid: $INFERENCE_ROOT/checkpoints" >&2
   exit 1
 }
 
-mkdir -p "$RUNTIME_ROOT"
 cd "$MVSAM_REPO"
 
 for INSTANCE_DIR in "${INSTANCE_DIRS[@]}"; do
@@ -202,19 +203,22 @@ PY
   echo "[$INSTANCE_NAME] Stage 1 + Stage 2: running native MV-SAM3D on GPU $GPU_ID"
   echo "[$INSTANCE_NAME]   Stage 1 input: RGB + SAM2 mask + mask-only pointmap"
   echo "[$INSTANCE_NAME]   Stage 2 input: Stage 1 structure + RGB + SAM2 mask"
-  "$MVSAM_ENV/bin/python" run_inference_weighted.py \
-    --input_path "$RUNTIME_DIR" \
-    --mask_prompt object \
-    --model_tag hf-5090 \
-    --decode_formats gaussian,mesh \
-    --seed 42 \
-    --stage1_steps 50 \
-    --stage2_steps 25 \
-    --da3_output "$RUNTIME_DIR/real_pointmaps.npz" \
-    --no_stage1_weighting \
-    --no_stage2_weighting
+  (
+    cd "$INFERENCE_ROOT"
+    "$MVSAM_ENV/bin/python" "$MVSAM_REPO/run_inference_weighted.py" \
+      --input_path "$RUNTIME_DIR" \
+      --mask_prompt object \
+      --model_tag hf-5090 \
+      --decode_formats gaussian,mesh \
+      --seed 42 \
+      --stage1_steps 50 \
+      --stage2_steps 25 \
+      --da3_output "$RUNTIME_DIR/real_pointmaps.npz" \
+      --no_stage1_weighting \
+      --no_stage2_weighting
+  )
 
-  VISUALIZATION_ROOT="$MVSAM_REPO/visualization/$INSTANCE_NAME/object"
+  VISUALIZATION_ROOT="$INFERENCE_ROOT/visualization/$INSTANCE_NAME/object"
   RESULT_GLB=$(find "$VISUALIZATION_ROOT" -type f -name result.glb -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
   [[ -n "$RESULT_GLB" && -s "$RESULT_GLB" ]] || { echo "result.glb not found for $INSTANCE_NAME" >&2; exit 1; }
 
